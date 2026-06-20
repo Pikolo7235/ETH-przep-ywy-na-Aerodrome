@@ -1,0 +1,5 @@
+Przygotowanie środowiska:
+npm init -y
+npm install ethers
+Wpisz Kod skryptu bota (bot.js) - kod w pliku p6 js
+Uruchom bota bashnode bot.js
