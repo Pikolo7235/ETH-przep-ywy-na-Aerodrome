@@ -1,0 +1,99 @@
+const { ethers } = require("ethers");
+
+// ==================== KONFIGURACJA BOTA ====================
+// Adres węzła RPC dla sieci Base (darmowy publiczny RPC)
+const BASE_RPC_URL = "https://base.org";
+
+// Adres smart kontraktu, który wdrożyłeś (AerodromeEthPoolTracker)
+const CONTRACT_ADDRESS = "TUTAJ_WKLEJ_ADRES_TWOJEGO_WDROZONEGO_KONTRAKTU";
+
+// Klucz prywatny portfela właściciela (BOT / OWNER).
+// UWAGA: Nigdy nie udostępniaj tego klucza i nie wrzucaj go na GitHub!
+const PRIVATE_KEY = "TUTAJ_WKLEJ_KLUCZ_PRYWATNY_PORTFELA_OWNER";
+
+// Interwał wywołań bota w milisekundach (np. 300000 ms = 5 minut)
+const INTERVAL_MS = 5 * 60 * 1000; 
+// ============================================================
+
+// Skrócone ABI kontraktu (zawiera tylko niezbędne dla bota funkcje i eventy)
+const CONTRACT_ABI = [
+    "function updateEthFlow() public returns (uint256, uint256)",
+    "function totalEthInTracked() public view returns (uint256)",
+    "function totalEthOutTracked() public view returns (uint256)",
+    "function getPoolWethBalance() public view returns (uint256)",
+    "event PoolEthFlowInRecorded(uint256 amountIn, uint256 currentPoolBalance)",
+    "event PoolEthFlowOutRecorded(uint256 amountOut, uint256 currentPoolBalance)"
+];
+
+async function runBot() {
+    // 1. Inicjalizacja połączenia z blockchainem Base
+    const provider = new ethers.JsonRpcProvider(BASE_RPC_URL);
+    
+    // 2. Podpięcie portfela bota z uprawnieniami do podpisywania transakcji
+    const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+    
+    // 3. Połączenie instancji kontraktu z portfelem bota
+    const trackerContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
+
+    console.log(`🤖 Bot uruchomiony pomyślnie!`);
+    console.log(`Address portfela bota: ${wallet.address}`);
+    console.log(`Monitorowanie kontraktu: ${CONTRACT_ADDRESS}\n`);
+
+    // Funkcja wykonująca pojedyncze sprawdzenie i aktualizację
+    async function checkAndUpdate() {
+        console.log(`[${new Date().toLocaleTimeString()}] 🔄 Rozpoczynam sprawdzanie puli Aerodrome...`);
+        
+        try {
+            // Pobranie aktualnego balansu WETH bezpośrednio z puli przed aktualizacją
+            const rawPoolBal = await trackerContract.getPoolWethBalance();
+            const poolBalance = ethers.formatEther(rawPoolBal);
+            console.log(`📊 Aktualny stan WETH w puli: ${parseFloat(poolBalance).toFixed(2)} WETH`);
+
+            // Szacowanie kosztów gasu przed wysłaniem transakcji
+            console.log("⏳ Szacowanie kosztów transakcji...");
+            const txResponse = await trackerContract.updateEthFlow();
+            
+            console.log(`🚀 Transakcja wysłana! Hash: ${txResponse.hash}`);
+            console.log("⏳ Oczekiwanie na potwierdzenie przez sieć Base...");
+            
+            // Oczekiwanie na zatwierdzenie transakcji w bloku
+            const receipt = await txResponse.wait();
+            
+            if (receipt.status === 1) {
+                console.log("✅ Transakcja zatwierdzona sukcesem!");
+                
+                // Odczytanie zaktualizowanych statystyk globalnych z kontraktu
+                const totalIn = ethers.formatEther(await trackerContract.totalEthInTracked());
+                const totalOut = ethers.formatEther(await trackerContract.totalEthOutTracked());
+                
+                console.log(`📈 Sumaryczny zalogowany napływ: ${parseFloat(totalIn).toFixed(2)} WETH`);
+                console.log(`📉 Sumaryczny zalogowany odpływ: ${parseFloat(totalOut).toFixed(2)} WETH`);
+            } else {
+                console.log("❌ Transakcja została odrzucona przez blockchain.");
+            }
+
+        } catch (error) {
+            console.error("⚠️ Wystąpił błąd podczas wykonywania transakcji:");
+            // Obsługa błędu w przypadku, gdy stan puli się nie zmienił lub brakło gasu
+            if (error.reason) {
+                console.error(`Powód: ${error.reason}`);
+            } else {
+                console.error(error.message);
+            }
+        }
+        console.log(`\n😴 Zasypiam na kolejne ${INTERVAL_MS / 1000 / 60} minut...\n`);
+    }
+
+    // Uruchomienie pierwszego sprawdzenia natychmiast po starcie
+    await checkAndUpdate();
+
+    // Cykliczne uruchamianie funkcji w pętli czasowej
+    setInterval(async () => {
+        await checkAndUpdate();
+    }, INTERVAL_MS);
+}
+
+// Uruchomienie głównej logiki bota i przechwytywanie błędów krytycznych
+runBot().catch((err) => {
+    console.error("🔥 Krytyczny błąd bota:", err);
+});
